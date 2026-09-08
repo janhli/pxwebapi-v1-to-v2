@@ -31,9 +31,10 @@ Har du bare selve JSON-spørringen (uten M-koden rundt), går det også fint.'><
       <div class="hint">Du trenger ikke fortelle appen hva slags spørring det er — den kjenner det igjen selv.</div>
 
       <div class="row">
-        <label class="toggle"><input type="radio" name="outputMode" value="POST" checked /> Samme type som før (anbefalt)</label>
-        <label class="toggle"><input type="radio" name="outputMode" value="GET" /> Enkel nettadresse</label>
+        <label class="toggle"><input type="radio" name="outputMode" value="POST" checked /> Samme oppsett som før (POST)</label>
+        <label class="toggle"><input type="radio" name="outputMode" value="GET" /> Enkel nettadresse (GET)</label>
       </div>
+      <div class="hint">POST ligner mest på slik spørringen var før. GET gir én nettadresse du kan åpne direkte i nettleseren for å teste.</div>
 
       <div class="row">
         <button id="btn">Oppdater spørringen</button>
@@ -53,7 +54,7 @@ Har du bare selve JSON-spørringen (uten M-koden rundt), går det også fint.'><
         <summary>Vis tekniske detaljer</summary>
         <ul>
           <li>Ny adresse har alltid formen <code>https://&lt;domene&gt;/api/pxwebapi/v2/tables/&lt;TABLE&gt;/data</code>, med <code>lang</code> som parameter.</li>
-          <li><strong>Enkel nettadresse (GET)</strong>: variabelvalg legges i URL-en som <code>valueCodes[Dim]=csv</code> (og <code>codelist[Dim]=...</code> ved aggregering/verdisett). <strong>Samme type som før (POST)</strong>: samme valg legges i body som <code>{"selection":[{"variableCode":...,"valueCodes":[...]}]}</code>.</li>
+          <li><strong>Samme oppsett som før (POST)</strong>: variabelvalgene legges i body som <code>{"selection":[{"variableCode":...,"valueCodes":[...]}]}</code>. <strong>Enkel nettadresse (GET)</strong>: samme valg legges i URL-en som <code>valueCodes[Dim]=csv</code> (og <code>codelist[Dim]=...</code> ved aggregering/verdisett).</li>
           <li>Rekkefølgen på variablene bevares. Braketter i parameternavn URL-encodes ikke.</li>
           <li>Gammelt filter <code>"all"</code> → <code>*</code>, <code>"top"</code> → <code>top(n)</code>, <code>"agg_x:NAVN"</code>/<code>"vs:NAVN"</code> → <code>codelist=NAVN</code> + valgte koder.</li>
           <li>Power BI M-kode: kun selve <code>Web.Contents(...)</code>-kallet byttes ut — resten av M-koden (variabler, senere steg) rører vi ikke.</li>
