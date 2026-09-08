@@ -201,11 +201,11 @@ function parseMLiteral(text) {
 
 function assertPxWebJson(obj) {
   if (!obj || typeof obj !== "object" || !Array.isArray(obj.query)) {
-    throw new Error("Ugyldig PXWeb-spørring: mangler 'query' som array.");
+    throw new Error("Fant ikke en gyldig spørring (mangler feltet «query»).");
   }
   for (const q of obj.query) {
     if (!q || typeof q.code !== "string" || !q.selection || !Array.isArray(q.selection.values)) {
-      throw new Error("Ugyldig element i 'query': krever { code: string, selection: { values: [] } }.");
+      throw new Error("En av radene i spørringen mangler variabelnavn («code») eller valgte verdier.");
     }
   }
 }
@@ -275,7 +275,7 @@ function extractWebContentsCall(text) {
 
 function parseWebContentsArgs(argsText) {
   const urlMatch = /^\s*"((?:[^"]|"")*)"/.exec(argsText);
-  if (!urlMatch) throw new Error("Fant ikke URL-strengen i Web.Contents(...).");
+  if (!urlMatch) throw new Error("Fant ikke nettadressen i Web.Contents(...)-kallet.");
   const url = unescapeMString(urlMatch[1]);
   let rest = argsText.slice(urlMatch.index + urlMatch[0].length);
   rest = rest.replace(/^\s*,\s*/, "");
@@ -286,7 +286,7 @@ function parseWebContentsArgs(argsText) {
 function extractContentExpression(optionsText) {
   const contentMatch = /Content\s*=\s*/.exec(optionsText);
   if (!contentMatch) {
-    throw new Error("Fant ingen 'Content'-felt i Web.Contents-opsjonene.");
+    throw new Error("Fant spørringen, men ikke noe «Content»-felt (selve dataene) i den.");
   }
   const exprStart = contentMatch.index + contentMatch[0].length;
   const remainder = optionsText.slice(exprStart);
@@ -296,13 +296,13 @@ function extractContentExpression(optionsText) {
     const closeParen = findMatchingBracket(optionsText, parenRel, "(", ")");
     const inner = optionsText.slice(parenRel + 1, closeParen).trim();
     const strMatch = /^"((?:[^"]|"")*)"$/.exec(inner);
-    if (!strMatch) throw new Error("Fant ikke en tekstlitteral inni Text.ToBinary(...).");
+    if (!strMatch) throw new Error("Klarte ikke å lese teksten inni Text.ToBinary(...) i spørringen.");
     const jsonText = unescapeMString(strMatch[1]);
     let query;
     try {
       query = JSON.parse(jsonText);
     } catch (e) {
-      throw new Error("Innholdet i Text.ToBinary(...) er ikke gyldig JSON.");
+      throw new Error("Det appen fant inni spørringen er ikke gyldig JSON.");
     }
     return query;
   }
@@ -315,17 +315,17 @@ function extractContentExpression(optionsText) {
   }
 
   throw new Error(
-    "Fant ikke et gjenkjennelig Content-uttrykk (forventet Text.ToBinary(\"...\") eller Json.FromValue([...]))."
+    "Kjenner ikke igjen denne typen spørring i M-koden (forventet Text.ToBinary(...) eller Json.FromValue(...))."
   );
 }
 
 function extractV1QueryFromMCode(text) {
   const call = extractWebContentsCall(text);
-  if (!call) throw new Error("Fant ikke noe Web.Contents(...)-kall i M-koden.");
+  if (!call) throw new Error("Fant ingen Power BI-spørring (Web.Contents) å oppdatere i det du limte inn.");
   const { url, optionsText } = parseWebContentsArgs(call.argsText);
   if (!optionsText) {
     throw new Error(
-      "Web.Contents(...) har ingen Content — fant ingen spørrings-JSON å konvertere. Denne modusen støtter foreløpig kun POST-baserte M-spørringer."
+      "Fant spørringen, men ikke selve dataene (Content) i den. Denne appen støtter foreløpig bare spørringer som sender data (POST)."
     );
   }
   const query = extractContentExpression(optionsText);

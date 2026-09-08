@@ -83,14 +83,14 @@ document.getElementById("autofillBtn").addEventListener("click", () => {
 
   let source = (inputEl.value || "").trim();
   if (!source) {
-    msgEl.textContent = "Lim inn en v1-URL eller cURL først.";
+    msgEl.textContent = "Lim inn en nettadresse eller cURL-kommando først.";
     return;
   }
 
   if (/^\s*curl\b/i.test(source)) {
     const url = parseCurlForUrl(source);
     if (!url) {
-      msgEl.textContent = "Fant ikke URL i cURL-strengen.";
+      msgEl.textContent = "Fant ingen nettadresse i det du limte inn.";
       return;
     }
     source = url;
@@ -154,24 +154,24 @@ document.getElementById("btn").addEventListener("click", () => {
 
   try {
     if (kind === "empty") {
-      throw new Error("Lim inn en v1 POST-JSON, Power BI M-kode, eller en v1-URL/cURL.");
+      throw new Error("Lim inn spørringen din i boksen over først.");
     }
 
     if (kind === "url") {
       const source = /^\s*curl\b/i.test(text) ? parseCurlForUrl(text) : text.trim();
-      if (!source) throw new Error("Fant ikke URL i cURL-strengen.");
+      if (!source) throw new Error("Fant ingen nettadresse i det du limte inn.");
       const det = detectFromUrl(source);
       applyAutofill(det, hostEl, tableEl, langEl);
       basePreview.textContent = "";
       setOutputAsText(
-        "Fant kun en URL/cURL (ingen spørrings-JSON). Domene/tabell/språk er fylt ut over — lim inn v1 POST-JSON eller full M-kode i boksen for å konvertere."
+        "Dette var bare en nettadresse, ikke selve spørringen. Domene/tabell/språk under «Avansert» er fylt ut — lim nå inn hele Power BI-spørringen (eller JSON-spørringen) i boksen for å fullføre."
       );
       return;
     }
 
     if (kind === "unknown") {
       throw new Error(
-        "Kjenner ikke igjen formatet. Forventet v1 POST-JSON ({ ... }), Power BI M-kode (let ... in ...), eller en v1-URL/cURL."
+        "Kjenner ikke igjen dette som en spørring. Prøv å lime inn hele M-koden fra Power BI, eller bare JSON-delen av den gamle spørringen."
       );
     }
 
@@ -187,24 +187,24 @@ document.getElementById("btn").addEventListener("click", () => {
       const newCall = buildMWebContentsCall(mode, hostEl.value, tableEl.value, langEl.value, extracted.query);
       const result = text.slice(0, extracted.callStart) + newCall + text.slice(extracted.callEnd);
 
-      basePreview.textContent = `Fant Web.Contents mot: ${extracted.url}`;
+      basePreview.textContent = `Fant spørringen mot: ${extracted.url}`;
       setOutputAsText(result);
       return;
     }
 
     // kind === "json"
     const px = tryParseJSON(text);
-    if (!px) throw new Error("Fant verken gjenkjennelig M-kode eller gyldig JSON i input.");
+    if (!px) throw new Error("Dette ser ikke ut som gyldig JSON. Sjekk at du har limt inn hele spørringen.");
     assertPxWebJson(px);
 
     if (mode === "GET") {
       const url = buildV2GetUrl(hostEl.value, tableEl.value, langEl.value, px);
-      basePreview.textContent = `Base-URL: ${buildV2BaseUrl(hostEl.value, tableEl.value, langEl.value)}`;
+      basePreview.textContent = `Ny nettadresse: ${buildV2BaseUrl(hostEl.value, tableEl.value, langEl.value)}`;
       setOutputAsUrl(url);
     } else {
       const url = buildV2PostUrl(hostEl.value, tableEl.value, langEl.value, px);
       const body = buildV2PostBody(px);
-      basePreview.textContent = `POST mot: ${url}`;
+      basePreview.textContent = `Sender til: ${url}`;
       setOutputAsText(`POST ${url}\n\n${JSON.stringify(body, null, 2)}`);
     }
   } catch (e) {

@@ -3,76 +3,46 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PXWeb v1 → v2</title>
-  <meta name="description" content="Konverter PXWeb v1 POST-JSON eller Power BI M-kode til PXWeb v2, som GET-URL eller POST-body. Kan auto-fylle host, tabell og språk fra v1-URL/cURL." />
+  <title>Oppdater gamle SSB-spørringer</title>
+  <meta name="description" content="Lim inn en gammel SSB-spørring fra Power BI eller PXWeb v1, og få den automatisk oppdatert til det nye SSB-APIet (v2) — med de samme tabellene og verdiene." />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <main>
     <header>
-      <h1>PXWeb v1 → v2</h1>
-      <p class="lead">Lim inn en PXWeb v1 POST-JSON, en hel Power BI M-spørring (Web.Contents), eller en gammel
-      v1-URL/cURL. Vi bygger v2-spørringen med samme variabelvalg, som <strong>GET</strong> eller <strong>POST</strong>
-      mot <code>https://&lt;domene&gt;/api/pxwebapi/v2/tables/&lt;TABLE&gt;/data</code>.</p>
+      <h1>Oppdater gamle SSB-spørringer</h1>
+      <p class="lead">SSB sitt gamle API blir lagt ned. Lim inn <strong>hele den gamle spørringen fra Power BI</strong>
+      (M-koden) i boksen under, så oppdaterer vi den automatisk til det nye API-et — med de samme tabellene og
+      verdiene som før. Har du bare selve JSON-spørringen, funker det også.</p>
     </header>
 
     <section class="card">
-      <label for="v0Input">v1-URL eller cURL (valgfritt, kun autofyll)</label>
-      <input id="v0Input" placeholder="f.eks. curl -X POST https://data.ssb.no/.../v1/... -d '{ ... }' eller en gammel v1-nettadresse" />
-      <div class="row">
-        <button id="autofillBtn" class="ghost">Autofyll fra v1-URL/cURL</button>
-        <button id="clearUrlBtn" class="ghost">Tøm URL-felt</button>
-      </div>
-      <div id="autofillMsg" class="hint"></div>
-    </section>
+      <label for="postBody">Lim inn spørringen din</label>
+      <textarea id="postBody" rows="16" placeholder='Lim inn HELE Power BI-spørringen (M-koden), for eksempel:
 
-    <section class="card">
-      <div class="grid">
-        <div>
-          <label for="host">Domene (ikke lim inn /api...)</label>
-          <input id="host" value="https://data.ssb.no" />
-          <div class="hint">Paster du M-kode/URL med domenet inni, bruker vi det automatisk.</div>
-        </div>
-        <div>
-          <label for="tableId">Tabell-ID</label>
-          <input id="tableId" placeholder="09429" />
-          <div class="hint">Eksempel: 09429</div>
-        </div>
-        <div>
-          <label for="lang">Språk</label>
-          <input id="lang" value="no" />
-          <div class="hint">f.eks. no / en</div>
-        </div>
-      </div>
+let
+    Source = Json.Document(Web.Contents("https://data.ssb.no/api/v0/no/table/07459/",
+        [Headers=[#"Content-Type"="application/json"],
+         Content=Text.ToBinary("{""query"":[...],""response"":{""format"":""json-stat2""}}")]))
+in
+    Source
 
-      <label for="postBody">v1 POST-JSON eller full Power BI M-kode</label>
-      <textarea id="postBody" rows="16" placeholder='Lim inn ENTEN v1 POST-JSON:
-{
-  "query": [
-    { "code": "Region", "selection": { "filter": "agg_single:KommGjeldende", "values": ["3101","3103"] } },
-    { "code": "Nivaa", "selection": { "filter": "item", "values": ["00","01","02a","11","03a","04a","09a"] } },
-    { "code": "ContentsCode", "selection": { "filter": "item", "values": ["Personer"] } },
-    { "code": "Tid", "selection": { "filter": "item", "values": ["2023","2024"] } }
-  ],
-  "response": { "format": "json-stat2" }
-}
-
-ELLER hele Power Query M-koden (let ... Web.Contents(...) ... in ...) fra en Power BI-rapport.'></textarea>
-      <div class="hint" id="kindHint">Formatet gjenkjennes automatisk (v1-JSON, Power BI M-kode, eller v1-URL/cURL).</div>
+Har du bare selve JSON-spørringen (uten M-koden rundt), går det også fint.'></textarea>
+      <div class="hint">Du trenger ikke fortelle appen hva slags spørring det er — den kjenner det igjen selv.</div>
 
       <div class="row">
-        <label class="toggle"><input type="radio" name="outputMode" value="GET" checked /> GET</label>
-        <label class="toggle"><input type="radio" name="outputMode" value="POST" /> POST</label>
+        <label class="toggle"><input type="radio" name="outputMode" value="POST" checked /> Samme type som før (anbefalt)</label>
+        <label class="toggle"><input type="radio" name="outputMode" value="GET" /> Enkel nettadresse</label>
       </div>
 
       <div class="row">
-        <button id="btn">Konverter</button>
+        <button id="btn">Oppdater spørringen</button>
         <button id="clearBtn" class="ghost">Tøm</button>
       </div>
 
       <div id="basePreview" class="hint"></div>
 
-      <label for="output">v2-resultat</label>
+      <label for="output">Ferdig! Her er den oppdaterte spørringen</label>
       <textarea id="output" rows="10" readonly></textarea>
       <div class="row">
         <button id="copyBtn">Kopier</button>
@@ -80,14 +50,44 @@ ELLER hele Power Query M-koden (let ... Web.Contents(...) ... in ...) fra en Pow
       </div>
 
       <details class="tip">
-        <summary>Hva garanteres</summary>
+        <summary>Vis tekniske detaljer</summary>
         <ul>
-          <li>Base-URL <em>tvinges</em> til <code>https://&lt;domene&gt;/api/pxwebapi/v2/tables/&lt;TABLE&gt;/data</code>, med <code>lang</code> som query-parameter.</li>
-          <li><strong>GET</strong>: variabelvalg legges til som <code>valueCodes[Dim]=csv</code> (og <code>codelist[Dim]=...</code> ved aggregering/verdisett). <strong>POST</strong>: samme valg legges i body som <code>{"selection":[{"variableCode":...,"valueCodes":[...]}]}</code>.</li>
-          <li>Rekkefølgen fra <code>query[]</code> bevares. Braketter (<code>[]</code>) i parameternavn encodes ikke.</li>
-          <li><code>filter: "all"</code> → <code>*</code>, <code>filter: "top"</code> → <code>top(n)</code>, <code>filter: "agg_x:NAVN"</code>/<code>"vs:NAVN"</code> → <code>codelist=NAVN</code> + valgte koder.</li>
-          <li>Power BI M-kode: kun <code>Web.Contents(...)</code>-kallet byttes ut — resten av M-koden (variabler, senere steg) er uendret. Støtter <code>Text.ToBinary("...")</code>- og <code>Json.FromValue([...])</code>-mønstre for body.</li>
+          <li>Ny adresse har alltid formen <code>https://&lt;domene&gt;/api/pxwebapi/v2/tables/&lt;TABLE&gt;/data</code>, med <code>lang</code> som parameter.</li>
+          <li><strong>Enkel nettadresse (GET)</strong>: variabelvalg legges i URL-en som <code>valueCodes[Dim]=csv</code> (og <code>codelist[Dim]=...</code> ved aggregering/verdisett). <strong>Samme type som før (POST)</strong>: samme valg legges i body som <code>{"selection":[{"variableCode":...,"valueCodes":[...]}]}</code>.</li>
+          <li>Rekkefølgen på variablene bevares. Braketter i parameternavn URL-encodes ikke.</li>
+          <li>Gammelt filter <code>"all"</code> → <code>*</code>, <code>"top"</code> → <code>top(n)</code>, <code>"agg_x:NAVN"</code>/<code>"vs:NAVN"</code> → <code>codelist=NAVN</code> + valgte koder.</li>
+          <li>Power BI M-kode: kun selve <code>Web.Contents(...)</code>-kallet byttes ut — resten av M-koden (variabler, senere steg) rører vi ikke.</li>
         </ul>
+      </details>
+
+      <details class="tip">
+        <summary>Avansert — bare hvis noe ikke fylles ut automatisk</summary>
+
+        <label for="v0Input">Har du bare en gammel nettadresse eller cURL-kommando (ikke selve spørringen)?</label>
+        <input id="v0Input" placeholder="f.eks. en gammel SSB-nettadresse, eller curl -X POST https://data.ssb.no/... -d '{ ... }'" />
+        <div class="row">
+          <button id="autofillBtn" class="ghost">Fyll ut fra nettadresse</button>
+          <button id="clearUrlBtn" class="ghost">Tøm dette feltet</button>
+        </div>
+        <div id="autofillMsg" class="hint"></div>
+
+        <div class="grid">
+          <div>
+            <label for="host">Domene</label>
+            <input id="host" value="https://data.ssb.no" />
+            <div class="hint">Fylles vanligvis ut automatisk fra spørringen din.</div>
+          </div>
+          <div>
+            <label for="tableId">Tabell-ID</label>
+            <input id="tableId" placeholder="09429" />
+            <div class="hint">Eksempel: 09429</div>
+          </div>
+          <div>
+            <label for="lang">Språk</label>
+            <input id="lang" value="no" />
+            <div class="hint">f.eks. no / en</div>
+          </div>
+        </div>
       </details>
     </section>
 
