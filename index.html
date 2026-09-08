@@ -3,23 +3,24 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PXWeb v0 → v2 (POST → GET)</title>
-  <meta name="description" content="Konverter PXWeb v0 POST-JSON til presis PXWeb v2 GET-URL. Kan auto-fylle host, tabell og språk fra v0-URL/cURL." />
+  <title>PXWeb v1 → v2</title>
+  <meta name="description" content="Konverter PXWeb v1 POST-JSON eller Power BI M-kode til PXWeb v2, som GET-URL eller POST-body. Kan auto-fylle host, tabell og språk fra v1-URL/cURL." />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <main>
     <header>
-      <h1>PXWeb v0 → v2</h1>
-      <p class="lead">Lim inn PXWeb v0 POST-JSON (SSB). Vi bygger <strong>alltid</strong> v2-URL med mønsteret
-      <code>https://&lt;domene&gt;/api/pxwebapi/v2/tables/&lt;TABLE&gt;/data?lang=&lt;LANG&gt;</code>.</p>
+      <h1>PXWeb v1 → v2</h1>
+      <p class="lead">Lim inn en PXWeb v1 POST-JSON, en hel Power BI M-spørring (Web.Contents), eller en gammel
+      v1-URL/cURL. Vi bygger v2-spørringen med samme variabelvalg, som <strong>GET</strong> eller <strong>POST</strong>
+      mot <code>https://&lt;domene&gt;/api/pxwebapi/v2/tables/&lt;TABLE&gt;/data</code>.</p>
     </header>
 
     <section class="card">
-      <label for="v0Input">v0-URL eller cURL (valgfritt)</label>
-      <input id="v0Input" placeholder="f.eks. curl -X POST https://data.ssb.no/.../v0/... -d '{ ... }' eller en gammel v0-nettadresse" />
+      <label for="v0Input">v1-URL eller cURL (valgfritt, kun autofyll)</label>
+      <input id="v0Input" placeholder="f.eks. curl -X POST https://data.ssb.no/.../v1/... -d '{ ... }' eller en gammel v1-nettadresse" />
       <div class="row">
-        <button id="autofillBtn" class="ghost">Autofyll fra v0-URL/cURL</button>
+        <button id="autofillBtn" class="ghost">Autofyll fra v1-URL/cURL</button>
         <button id="clearUrlBtn" class="ghost">Tøm URL-felt</button>
       </div>
       <div id="autofillMsg" class="hint"></div>
@@ -30,7 +31,7 @@
         <div>
           <label for="host">Domene (ikke lim inn /api...)</label>
           <input id="host" value="https://data.ssb.no" />
-          <div class="hint">Paster du en hel URL med /v0/ osv., så plukker vi ut bare domenet.</div>
+          <div class="hint">Paster du M-kode/URL med domenet inni, bruker vi det automatisk.</div>
         </div>
         <div>
           <label for="tableId">Tabell-ID</label>
@@ -44,8 +45,8 @@
         </div>
       </div>
 
-      <label for="postBody">PXWeb v0 POST-body (JSON)</label>
-      <textarea id="postBody" rows="14" placeholder='Lim inn v0 POST-JSON, f.eks.:
+      <label for="postBody">v1 POST-JSON eller full Power BI M-kode</label>
+      <textarea id="postBody" rows="16" placeholder='Lim inn ENTEN v1 POST-JSON:
 {
   "query": [
     { "code": "Region", "selection": { "filter": "agg_single:KommGjeldende", "values": ["3101","3103"] } },
@@ -54,7 +55,15 @@
     { "code": "Tid", "selection": { "filter": "item", "values": ["2023","2024"] } }
   ],
   "response": { "format": "json-stat2" }
-}'></textarea>
+}
+
+ELLER hele Power Query M-koden (let ... Web.Contents(...) ... in ...) fra en Power BI-rapport.'></textarea>
+      <div class="hint" id="kindHint">Formatet gjenkjennes automatisk (v1-JSON, Power BI M-kode, eller v1-URL/cURL).</div>
+
+      <div class="row">
+        <label class="toggle"><input type="radio" name="outputMode" value="GET" checked /> GET</label>
+        <label class="toggle"><input type="radio" name="outputMode" value="POST" /> POST</label>
+      </div>
 
       <div class="row">
         <button id="btn">Konverter</button>
@@ -63,8 +72,8 @@
 
       <div id="basePreview" class="hint"></div>
 
-      <label for="output">v2 GET-URL</label>
-      <input id="output" readonly />
+      <label for="output">v2-resultat</label>
+      <textarea id="output" rows="10" readonly></textarea>
       <div class="row">
         <button id="copyBtn">Kopier</button>
         <a id="openBtn" class="ghost" href="#" target="_blank" rel="noopener">Åpne i ny fane</a>
@@ -73,9 +82,11 @@
       <details class="tip">
         <summary>Hva garanteres</summary>
         <ul>
-          <li>Base-URL <em>tvinges</em> til <code>https://&lt;domene&gt;/api/pxwebapi/v2/tables/&lt;TABLE&gt;/data?lang=&lt;LANG&gt;</code>.</li>
-          <li>Kun <code>valueCodes[Dim]=csv</code> legges til etter <code>lang</code>.</li>
-          <li>Rekkefølgen fra <code>query[]</code> bevares. Braketter (<code>[]</code>) encodes ikke.</li>
+          <li>Base-URL <em>tvinges</em> til <code>https://&lt;domene&gt;/api/pxwebapi/v2/tables/&lt;TABLE&gt;/data</code>, med <code>lang</code> som query-parameter.</li>
+          <li><strong>GET</strong>: variabelvalg legges til som <code>valueCodes[Dim]=csv</code> (og <code>codelist[Dim]=...</code> ved aggregering/verdisett). <strong>POST</strong>: samme valg legges i body som <code>{"selection":[{"variableCode":...,"valueCodes":[...]}]}</code>.</li>
+          <li>Rekkefølgen fra <code>query[]</code> bevares. Braketter (<code>[]</code>) i parameternavn encodes ikke.</li>
+          <li><code>filter: "all"</code> → <code>*</code>, <code>filter: "top"</code> → <code>top(n)</code>, <code>filter: "agg_x:NAVN"</code>/<code>"vs:NAVN"</code> → <code>codelist=NAVN</code> + valgte koder.</li>
+          <li>Power BI M-kode: kun <code>Web.Contents(...)</code>-kallet byttes ut — resten av M-koden (variabler, senere steg) er uendret. Støtter <code>Text.ToBinary("...")</code>- og <code>Json.FromValue([...])</code>-mønstre for body.</li>
         </ul>
       </details>
     </section>
@@ -85,6 +96,7 @@
     </footer>
   </main>
 
+  <script src="convert.js"></script>
   <script src="main.js"></script>
 </body>
 </html>
