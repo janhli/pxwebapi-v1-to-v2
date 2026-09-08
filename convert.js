@@ -45,9 +45,22 @@ function buildV2GetQueryString(v1Query) {
   return parts.join("&");
 }
 
+// v1 response.format names that don't carry over to v2 as-is.
+const V1_FORMAT_TO_V2 = {
+  csv2: { outputFormat: "csv", outputFormatParams: "SeparatorSemicolon" },
+};
+
 function buildOutputFormatParam(v1Query) {
   const format = v1Query.response && v1Query.response.format;
   if (!format || format === "json-stat2") return "";
+  const mapped = V1_FORMAT_TO_V2[format];
+  if (mapped) {
+    const parts = [`outputFormat=${encodeURIComponent(mapped.outputFormat)}`];
+    if (mapped.outputFormatParams) {
+      parts.push(`outputFormatParams=${encodeURIComponent(mapped.outputFormatParams)}`);
+    }
+    return parts.join("&");
+  }
   return `outputFormat=${encodeURIComponent(format)}`;
 }
 
@@ -261,6 +274,201 @@ function findMatchingBracket(text, openIndex, openChar, closeChar) {
   throw new Error(`Fant ikke avsluttende '${closeChar}' i M-koden`);
 }
 
+function computeStringRanges(text) {
+  const ranges = [];
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === '"') {
+      const start = i;
+      const end = skipMString(text, i);
+      ranges.push([start, end]);
+      i = end;
+      continue;
+    }
+    i++;
+  }
+  return ranges;
+}
+
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Finds `name = <expr>` at the top level of the M code (skipping occurrences
+// inside string literals) and returns the raw, unparsed `<expr>` text up to
+// the next top-level comma. Used to resolve `let`-bound variables referenced
+// elsewhere (e.g. a Web.Contents argument that's just an identifier).
+function findLetVariableDefinition(fullText, name) {
+  const stringRanges = computeStringRanges(fullText);
+  const re = new RegExp(`\\b${escapeRegExp(name)}\\s*=(?!=)`, "g");
+  let m;
+  while ((m = re.exec(fullText))) {
+    const idx = m.index;
+    if (stringRanges.some(([s, e]) => idx >= s && idx < e)) continue;
+
+    let i = m.index + m[0].length;
+    let depth = 0;
+    while (i < fullText.length) {
+      const c = fullText[i];
+      if (c === '"') {
+        i = skipMString(fullText, i);
+        continue;
+      }
+      if (c === "(" || c === "[" || c === "{") {
+        depth++;
+        i++;
+        continue;
+      }
+      if (c === ")" || c === "]" || c === "}") {
+        depth--;
+        i++;
+        continue;
+      }
+      if (c === "," && depth === 0) break;
+      i++;
+    }
+    return fullText.slice(m.index + m[0].length, i).trim();
+  }
+  return null;
+}
+
+// Splits the raw text of Web.Contents' arguments (or any comma-separated M
+// argument list) on top-level commas, ignoring commas inside strings/brackets.
+function splitTopLevelArgs(argsText) {
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  let i = 0;
+  while (i < argsText.length) {
+    const c = argsText[i];
+    if (c === '"') {
+      i = skipMString(argsText, i);
+      continue;
+    }
+    if (c === "(" || c === "[" || c === "{") {
+      depth++;
+      i++;
+      continue;
+    }
+    if (c === ")" || c === "]" || c === "}") {
+      depth--;
+      i++;
+      continue;
+    }
+    if (c === "," && depth === 0) {
+      parts.push(argsText.slice(start, i));
+      start = i + 1;
+      i++;
+      continue;
+    }
+    i++;
+  }
+  parts.push(argsText.slice(start));
+  return parts.map((s) => s.trim());
+}
+
+// Evaluates a small subset of M expressions down to a plain string: a string
+// literal, an identifier resolved against the surrounding `let` block, or any
+// number of those joined with `&`. Covers real-world queries where the URL or
+// JSON body isn't inlined but built from `let`-bound variables.
+function evalMStringExpr(fullText, exprText, seen) {
+  seen = seen || new Set();
+  let i = 0;
+
+  function skipWs() {
+    while (i < exprText.length && /\s/.test(exprText[i])) i++;
+  }
+
+  function parseTerm() {
+    skipWs();
+    if (exprText[i] === '"') {
+      i++; // consume opening quote
+      let out = "";
+      while (i < exprText.length) {
+        if (exprText[i] === '"') {
+          if (exprText[i + 1] === '"') {
+            out += '"';
+            i += 2;
+            continue;
+          }
+          i++;
+          return out;
+        }
+        out += exprText[i];
+        i++;
+      }
+      throw new Error("Uavsluttet strengliteral i M-koden.");
+    }
+    const start = i;
+    while (i < exprText.length && /[A-Za-z0-9_.]/.test(exprText[i])) i++;
+    if (i === start) {
+      throw new Error(`Klarte ikke å tolke uttrykket «${exprText.trim()}» i M-koden.`);
+    }
+    const name = exprText.slice(start, i);
+    if (seen.has(name)) {
+      throw new Error(`Fant en sirkulær referanse til variabelen «${name}» i M-koden.`);
+    }
+    const def = findLetVariableDefinition(fullText, name);
+    if (def == null) {
+      throw new Error(`Fant ikke variabelen «${name}» i M-koden.`);
+    }
+    const nextSeen = new Set(seen);
+    nextSeen.add(name);
+    return evalMStringExpr(fullText, def, nextSeen);
+  }
+
+  let value = parseTerm();
+  skipWs();
+  while (exprText[i] === "&") {
+    i++;
+    value += parseTerm();
+    skipWs();
+  }
+  return value;
+}
+
+// Finds the first balanced {...} object in arbitrary text, respecting JSON
+// string quoting (so braces inside string values don't end the scan early).
+// Lets us pull the real JSON out of a variable whose value is wrapped in
+// leftover template comment text (a common real-world Power Query pattern).
+function extractJsonObject(text) {
+  const start = text.indexOf("{");
+  if (start === -1) return null;
+  let i = start;
+  let depth = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === '"') {
+      i++;
+      while (i < text.length) {
+        if (text[i] === "\\") {
+          i += 2;
+          continue;
+        }
+        if (text[i] === '"') {
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+    if (c === "{") {
+      depth++;
+      i++;
+      continue;
+    }
+    if (c === "}") {
+      depth--;
+      i++;
+      if (depth === 0) return text.slice(start, i);
+      continue;
+    }
+    i++;
+  }
+  return null;
+}
+
 function extractWebContentsCall(text) {
   const m = /Web\.Contents\s*\(/.exec(text);
   if (!m) return null;
@@ -273,17 +481,14 @@ function extractWebContentsCall(text) {
   };
 }
 
-function parseWebContentsArgs(argsText) {
-  const urlMatch = /^\s*"((?:[^"]|"")*)"/.exec(argsText);
-  if (!urlMatch) throw new Error("Fant ikke nettadressen i Web.Contents(...)-kallet.");
-  const url = unescapeMString(urlMatch[1]);
-  let rest = argsText.slice(urlMatch.index + urlMatch[0].length);
-  rest = rest.replace(/^\s*,\s*/, "");
-  if (!rest.trim()) return { url, optionsText: null };
-  return { url, optionsText: rest };
+function parseWebContentsArgs(fullText, argsText) {
+  const [urlExpr, optionsText] = splitTopLevelArgs(argsText);
+  if (!urlExpr) throw new Error("Fant ikke nettadressen i Web.Contents(...)-kallet.");
+  const url = evalMStringExpr(fullText, urlExpr);
+  return { url, optionsText: optionsText || null };
 }
 
-function extractContentExpression(optionsText) {
+function extractContentExpression(fullText, optionsText) {
   const contentMatch = /Content\s*=\s*/.exec(optionsText);
   if (!contentMatch) {
     throw new Error("Fant spørringen, men ikke noe «Content»-felt (selve dataene) i den.");
@@ -295,9 +500,12 @@ function extractContentExpression(optionsText) {
     const parenRel = optionsText.indexOf("(", exprStart);
     const closeParen = findMatchingBracket(optionsText, parenRel, "(", ")");
     const inner = optionsText.slice(parenRel + 1, closeParen).trim();
-    const strMatch = /^"((?:[^"]|"")*)"$/.exec(inner);
-    if (!strMatch) throw new Error("Klarte ikke å lese teksten inni Text.ToBinary(...) i spørringen.");
-    const jsonText = unescapeMString(strMatch[1]);
+    const [contentExpr] = splitTopLevelArgs(inner);
+    const resolvedText = evalMStringExpr(fullText, contentExpr);
+    const jsonText = extractJsonObject(resolvedText);
+    if (!jsonText) {
+      throw new Error("Fant ingen JSON-spørring i teksten Text.ToBinary(...) peker på.");
+    }
     let query;
     try {
       query = JSON.parse(jsonText);
@@ -322,13 +530,13 @@ function extractContentExpression(optionsText) {
 function extractV1QueryFromMCode(text) {
   const call = extractWebContentsCall(text);
   if (!call) throw new Error("Fant ingen Power BI-spørring (Web.Contents) å oppdatere i det du limte inn.");
-  const { url, optionsText } = parseWebContentsArgs(call.argsText);
+  const { url, optionsText } = parseWebContentsArgs(text, call.argsText);
   if (!optionsText) {
     throw new Error(
       "Fant spørringen, men ikke selve dataene (Content) i den. Denne appen støtter foreløpig bare spørringer som sender data (POST)."
     );
   }
-  const query = extractContentExpression(optionsText);
+  const query = extractContentExpression(text, optionsText);
   return { url, query, callStart: call.callStart, callEnd: call.callEnd };
 }
 
@@ -367,5 +575,8 @@ if (typeof module !== "undefined" && module.exports) {
     extractV1QueryFromMCode,
     buildMWebContentsCall,
     convertMCode,
+    findLetVariableDefinition,
+    evalMStringExpr,
+    extractJsonObject,
   };
 }

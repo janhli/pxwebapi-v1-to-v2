@@ -15,6 +15,9 @@ const {
   detectInputKind,
   extractV1QueryFromMCode,
   convertMCode,
+  evalMStringExpr,
+  findLetVariableDefinition,
+  extractJsonObject,
 } = require("./convert.js");
 
 test("filter 'item' passes values through unchanged", () => {
@@ -120,6 +123,13 @@ test("buildOutputFormatParam returns outputFormat=X for a non-default format", (
 
 test("buildOutputFormatParam is empty when response is missing", () => {
   assert.equal(buildOutputFormatParam({ query: [] }), "");
+});
+
+test("buildOutputFormatParam maps the v1 'csv2' format to v2 csv + SeparatorSemicolon", () => {
+  assert.equal(
+    buildOutputFormatParam({ response: { format: "csv2" } }),
+    "outputFormat=csv&outputFormatParams=SeparatorSemicolon"
+  );
 });
 
 test("buildV2GetUrl builds the full v2 GET URL with lang and valueCodes", () => {
@@ -282,6 +292,116 @@ test("convertMCode (GET mode) replaces only the Web.Contents call, keeping the r
 in
     Source`
   );
+});
+
+test("extractJsonObject finds the JSON object even with comment text wrapped around it", () => {
+  const text = '\n\n//ERSTATT EKSEMPELKODEN//\n\n{"query":[],"response":{"format":"csv2"}}\n\n//SLUTT//\n';
+  assert.equal(extractJsonObject(text), '{"query":[],"response":{"format":"csv2"}}');
+});
+
+test("extractJsonObject returns null when there is no JSON object", () => {
+  assert.equal(extractJsonObject("no json here"), null);
+});
+
+test("findLetVariableDefinition finds a simple string assignment", () => {
+  const m = 'let\n    tableId = "09817",\n    Kilde = 1\nin\n    Kilde';
+  assert.equal(findLetVariableDefinition(m, "tableId"), '"09817"');
+});
+
+test("findLetVariableDefinition returns null for an undefined name", () => {
+  const m = 'let\n    tableId = "09817"\nin\n    tableId';
+  assert.equal(findLetVariableDefinition(m, "missingVar"), null);
+});
+
+test("findLetVariableDefinition captures a multi-line string literal up to the next top-level comma", () => {
+  const m = 'let\n    PostContents ="\n{""a"":1}\n"\n,\nKilde = 1\nin\n    Kilde';
+  assert.equal(findLetVariableDefinition(m, "PostContents"), '"\n{""a"":1}\n"');
+});
+
+test("evalMStringExpr resolves a plain string literal", () => {
+  assert.equal(evalMStringExpr("let x = 1 in x", '"hello"'), "hello");
+});
+
+test("evalMStringExpr resolves an identifier by looking it up in the surrounding let-block", () => {
+  const m = 'let\n    tableId = "09817"\nin\n    tableId';
+  assert.equal(evalMStringExpr(m, "tableId"), "09817");
+});
+
+test("evalMStringExpr resolves a string concatenated with a variable (&)", () => {
+  const m = 'let\n    tableId = "09817"\nin\n    tableId';
+  assert.equal(
+    evalMStringExpr(m, '"https://data.ssb.no/api/v0/no/table/" & tableId'),
+    "https://data.ssb.no/api/v0/no/table/09817"
+  );
+});
+
+// A trimmed-down version of the real-world SSB "Advanced Editor" template: the JSON
+// body lives in its own `PostContents` variable (wrapped in template comment text),
+// and the URL is built from a literal prefix concatenated with a `tableId` variable.
+const realWorldTemplate = `let
+tableId = "09817",
+PostContents ="
+
+
+//ERSTATT EKSEMPELKODEN NEDENFOR MED KODEN FRA SSB//
+
+{
+  ""query"": [
+    {
+      ""code"": ""Region"",
+      ""selection"": {
+        ""filter"": ""vs:Kommune"",
+        ""values"": [
+          ""3001"",
+          ""3002""
+        ]
+      }
+    },
+    {
+      ""code"": ""Tid"",
+      ""selection"": {
+        ""filter"": ""items"",
+        ""values"": [
+          ""2023"",""2022""
+        ]
+      }
+    }
+  ],
+  ""response"": {
+    ""format"": ""csv2""
+  }
+}
+
+
+//ERSTATT EKSEMPELKODEN OVENFOR MED KODEN FRA SSB //
+
+"
+
+,
+Kilde = Csv.Document(Web.Contents("https://data.ssb.no/api/v0/no/table/" & tableId, [Content=Text.ToBinary(PostContents)]),[Delimiter=",", Encoding=1252, QuoteStyle=QuoteStyle.None])
+in
+    Kilde`;
+
+test("extractV1QueryFromMCode follows a Text.ToBinary(variable) reference and strips comment noise around the JSON", () => {
+  const result = extractV1QueryFromMCode(realWorldTemplate);
+  assert.equal(result.url, "https://data.ssb.no/api/v0/no/table/09817");
+  assert.deepEqual(result.query, {
+    query: [
+      { code: "Region", selection: { filter: "vs:Kommune", values: ["3001", "3002"] } },
+      { code: "Tid", selection: { filter: "items", values: ["2023", "2022"] } },
+    ],
+    response: { format: "csv2" },
+  });
+});
+
+test("convertMCode handles the real-world template end to end (GET mode)", () => {
+  const result = convertMCode(realWorldTemplate, "GET", "https://data.ssb.no", "09817", "no");
+  assert.match(
+    result,
+    /Kilde = Csv\.Document\(Web\.Contents\("https:\/\/data\.ssb\.no\/api\/pxwebapi\/v2\/tables\/09817\/data\?lang=no&outputFormat=csv&outputFormatParams=SeparatorSemicolon&codelist\[Region\]=Kommune&valueCodes\[Region\]=3001,3002&valueCodes\[Tid\]=2023,2022"\)/
+  );
+  assert.match(result, /^let\ntableId = "09817",\nPostContents ="/);
+  assert.match(result, /in\n {4}Kilde$/);
 });
 
 test("convertMCode (POST mode) rebuilds a Text.ToBinary content call with the v2 body", () => {
