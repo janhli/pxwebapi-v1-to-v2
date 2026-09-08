@@ -33,8 +33,15 @@ POST: https://<domene>/api/pxwebapi/v2/tables/<TABLE>/data?lang=<LANG>
 - Base-URL bygges **alltid** som v2: `.../api/pxwebapi/v2/tables/<TABLE>/data?lang=<LANG>`
 - Rekkefølgen fra `query[]` bevares. Braketter i parameternavn encodes ikke; verdier encodes individuelt.
 - `selection.filter`-mapping: `"item"`/mangler → verdiene som de er, `"all"` → `*` (wildcard),
-  `"top"` → `top(n)`, alt med et kolon (`"agg_single:X"`, `"vs:X"`, osv.) → `codelist=X` + verdiene.
-- `response.format` (hvis satt og ikke `json-stat2`) legges til som `outputFormat=...`.
+  `"top"` → `top(n)`, alt med et kolon (`"agg_single:X"`, `"vs:X"`, osv.) → `codelist=agg_X`/`codelist=vs_X`
+  + verdiene (bekreftet mot SSB sitt v2-API — de eksakte navnene på kodelistene beholder prefikset).
+- `response.format`: `"csv2"` → `outputFormat=csv&outputFormatParams=SeparatorSemicolon` (v1-navnet finnes ikke i v2).
+  Andre formater enn `json-stat2` legges til som `outputFormat=...`.
+- **Obligatoriske variabler som mangler i den gamle spørringen**: v1 tillot at obligatoriske variabler ble
+  utelatt (og valgte da automatisk alle verdier). v2 krever et eksplisitt valg. Appen slår derfor opp
+  tabellens metadata (`.../tables/<TABLE>/metadata`) og fyller automatisk inn `*` (alle verdier) for enhver
+  obligatorisk variabel som mangler — og forklarer det i forhåndsvisningen. Slår oppslaget feil (nettverksfeil,
+  et domene uten samme metadata-endepunkt), fortsetter konverteringen uten denne sjekken.
 - **Power BI M-kode**: gjenkjenner `Content=Text.ToBinary("...")` (JSON som tekstlitteral) og
   `Content=Json.FromValue([...])` (JSON som M-record). Uvanlige mønstre gir en tydelig feilmelding
   i stedet for et feil resultat.

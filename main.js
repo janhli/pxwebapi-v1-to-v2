@@ -142,7 +142,35 @@ function setOutputAsText(text) {
   openBtn.hidden = true;
 }
 
-document.getElementById("btn").addEventListener("click", () => {
+// v1 let mandatory (non-eliminable) variables be left out of the query
+// entirely and silently selected "all" for them; v2 requires an explicit
+// selection. We check the table's own metadata for any such variable
+// missing from the pasted query, and fill it in with a wildcard so the
+// converted query returns the same data the old one did. Best-effort: if
+// the metadata call fails (offline, non-SSB host, etc.) we just skip this
+// and let the rest of the conversion proceed.
+async function findMissingMandatoryVariables(host, tableId, lang, v1Query) {
+  try {
+    const url = `${host}/api/pxwebapi/v2/tables/${encodeURIComponent(tableId)}/metadata?lang=${encodeURIComponent(lang)}`;
+    const res = await fetch(url);
+    if (!res.ok) return { missing: [], warning: null };
+    const metadata = await res.json();
+    const tableVariables = parseTableVariablesFromMetadata(metadata);
+    return { missing: computeMissingMandatoryVariables(v1Query, tableVariables), warning: null };
+  } catch (e) {
+    return {
+      missing: [],
+      warning: "Klarte ikke å sjekke tabellen for obligatoriske variabler (nettverksfeil) — sjekk gjerne resultatet mot tabellen på ssb.no.",
+    };
+  }
+}
+
+function describeMissingVariables(missing) {
+  if (!missing.length) return "";
+  return `La automatisk til obligatorisk(e) variabel(er) med alle verdier (fantes ikke i den gamle spørringen): ${missing.join(", ")}.`;
+}
+
+document.getElementById("btn").addEventListener("click", async () => {
   const hostEl = document.getElementById("host");
   const tableEl = document.getElementById("tableId");
   const langEl = document.getElementById("lang");
@@ -184,10 +212,26 @@ document.getElementById("btn").addEventListener("click", () => {
       if (det.tableId) tableEl.value = det.tableId;
       if (det.lang) langEl.value = det.lang;
 
-      const newCall = buildMWebContentsCall(mode, hostEl.value, tableEl.value, langEl.value, extracted.query);
+      const { missing, warning } = await findMissingMandatoryVariables(
+        hostEl.value,
+        tableEl.value,
+        langEl.value,
+        extracted.query
+      );
+
+      const newCall = buildMWebContentsCall(
+        mode,
+        hostEl.value,
+        tableEl.value,
+        langEl.value,
+        extracted.query,
+        missing
+      );
       const result = text.slice(0, extracted.callStart) + newCall + text.slice(extracted.callEnd);
 
-      basePreview.textContent = `Fant spørringen mot: ${extracted.url}`;
+      basePreview.textContent = [warning, describeMissingVariables(missing), `Fant spørringen mot: ${extracted.url}`]
+        .filter(Boolean)
+        .join(" ");
       setOutputAsText(result);
       return;
     }
@@ -197,14 +241,29 @@ document.getElementById("btn").addEventListener("click", () => {
     if (!px) throw new Error("Dette ser ikke ut som gyldig JSON. Sjekk at du har limt inn hele spørringen.");
     assertPxWebJson(px);
 
+    const { missing, warning } = await findMissingMandatoryVariables(
+      hostEl.value,
+      tableEl.value,
+      langEl.value,
+      px
+    );
+
     if (mode === "GET") {
-      const url = buildV2GetUrl(hostEl.value, tableEl.value, langEl.value, px);
-      basePreview.textContent = `Ny nettadresse: ${buildV2BaseUrl(hostEl.value, tableEl.value, langEl.value)}`;
+      const url = buildV2GetUrl(hostEl.value, tableEl.value, langEl.value, px, missing);
+      basePreview.textContent = [
+        warning,
+        describeMissingVariables(missing),
+        `Ny nettadresse: ${buildV2BaseUrl(hostEl.value, tableEl.value, langEl.value)}`,
+      ]
+        .filter(Boolean)
+        .join(" ");
       setOutputAsUrl(url);
     } else {
       const url = buildV2PostUrl(hostEl.value, tableEl.value, langEl.value, px);
-      const body = buildV2PostBody(px);
-      basePreview.textContent = `Sender til: ${url}`;
+      const body = buildV2PostBody(px, missing);
+      basePreview.textContent = [warning, describeMissingVariables(missing), `Sender til: ${url}`]
+        .filter(Boolean)
+        .join(" ");
       setOutputAsText(`POST ${url}\n\n${JSON.stringify(body, null, 2)}`);
     }
   } catch (e) {

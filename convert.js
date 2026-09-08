@@ -18,24 +18,36 @@ function convertV1DimensionToV2(dim) {
 
   const colonIdx = filter.indexOf(":");
   if (colonIdx !== -1) {
-    const codelist = filter.slice(colonIdx + 1);
-    return { variableCode: code, codelist, valueCodes: values };
+    const type = filter.slice(0, colonIdx);
+    const name = filter.slice(colonIdx + 1);
+    // v2 codelist ids keep a short family prefix (agg_/vs_), not just the
+    // name after the colon — verified against SSB's live API, which
+    // rejects e.g. "KommGjeldende" but accepts "agg_KommGjeldende".
+    const family = /^agg/i.test(type) ? "agg" : /^vs/i.test(type) ? "vs" : type;
+    return { variableCode: code, codelist: `${family}_${name}`, valueCodes: values };
   }
 
   return { variableCode: code, valueCodes: values };
 }
 
-function buildV2Selection(v1Query) {
-  return v1Query.query.map(convertV1DimensionToV2);
+function buildV2Selection(v1Query, extraVariableCodes) {
+  const selection = v1Query.query.map(convertV1DimensionToV2);
+  if (extraVariableCodes && extraVariableCodes.length) {
+    const present = new Set(selection.map((d) => d.variableCode));
+    for (const code of extraVariableCodes) {
+      if (!present.has(code)) selection.push({ variableCode: code, valueCodes: ["*"] });
+    }
+  }
+  return selection;
 }
 
-function buildV2PostBody(v1Query) {
-  return { selection: buildV2Selection(v1Query) };
+function buildV2PostBody(v1Query, extraVariableCodes) {
+  return { selection: buildV2Selection(v1Query, extraVariableCodes) };
 }
 
-function buildV2GetQueryString(v1Query) {
+function buildV2GetQueryString(v1Query, extraVariableCodes) {
   const parts = [];
-  for (const dim of buildV2Selection(v1Query)) {
+  for (const dim of buildV2Selection(v1Query, extraVariableCodes)) {
     if (dim.codelist) {
       parts.push(`codelist[${dim.variableCode}]=${encodeURIComponent(dim.codelist)}`);
     }
@@ -68,10 +80,10 @@ function buildV2BaseUrl(host, tableId, lang) {
   return `${host}/api/pxwebapi/v2/tables/${tableId}/data?lang=${encodeURIComponent(lang)}`;
 }
 
-function buildV2GetUrl(host, tableId, lang, v1Query) {
+function buildV2GetUrl(host, tableId, lang, v1Query, extraVariableCodes) {
   const base = buildV2BaseUrl(host, tableId, lang);
   const outputFormat = buildOutputFormatParam(v1Query);
-  const valueCodes = buildV2GetQueryString(v1Query);
+  const valueCodes = buildV2GetQueryString(v1Query, extraVariableCodes);
   const extra = [outputFormat, valueCodes].filter(Boolean).join("&");
   return extra ? `${base}&${extra}` : base;
 }
@@ -540,21 +552,40 @@ function extractV1QueryFromMCode(text) {
   return { url, query, callStart: call.callStart, callEnd: call.callEnd };
 }
 
-function buildMWebContentsCall(mode, host, tableId, lang, v1Query) {
+function buildMWebContentsCall(mode, host, tableId, lang, v1Query, extraVariableCodes) {
   if (mode === "GET") {
-    const url = buildV2GetUrl(host, tableId, lang, v1Query);
+    const url = buildV2GetUrl(host, tableId, lang, v1Query, extraVariableCodes);
     return `Web.Contents("${escapeMString(url)}")`;
   }
   const url = buildV2PostUrl(host, tableId, lang, v1Query);
-  const body = JSON.stringify(buildV2PostBody(v1Query));
+  const body = JSON.stringify(buildV2PostBody(v1Query, extraVariableCodes));
   return `Web.Contents("${escapeMString(url)}", [Headers=[#"Content-Type"="application/json"], Content=Text.ToBinary("${escapeMString(body)}")])`;
 }
 
-function convertMCode(text, mode, host, tableId, lang) {
+function convertMCode(text, mode, host, tableId, lang, extraVariableCodes) {
   const extracted = extractV1QueryFromMCode(text);
   assertPxWebJson(extracted.query);
-  const newCall = buildMWebContentsCall(mode, host, tableId, lang, extracted.query);
+  const newCall = buildMWebContentsCall(mode, host, tableId, lang, extracted.query, extraVariableCodes);
   return text.slice(0, extracted.callStart) + newCall + text.slice(extracted.callEnd);
+}
+
+// Reads the (elimination) mandatory-ness of each table variable out of the v2
+// /tables/{id}/metadata response, so callers can detect v1 queries that
+// omitted a now-mandatory variable (v1 silently selected "all" for those;
+// v2 requires it explicitly).
+function parseTableVariablesFromMetadata(metadata) {
+  const ids = (metadata && metadata.id) || [];
+  return ids.map((id) => {
+    const dim = metadata.dimension && metadata.dimension[id];
+    const ext = dim && dim.extension;
+    const elimination = ext && typeof ext.elimination === "boolean" ? ext.elimination : true;
+    return { id, elimination };
+  });
+}
+
+function computeMissingMandatoryVariables(v1Query, tableVariables) {
+  const present = new Set(v1Query.query.map((q) => q.code));
+  return tableVariables.filter((v) => v.elimination === false && !present.has(v.id)).map((v) => v.id);
 }
 
 if (typeof module !== "undefined" && module.exports) {
@@ -578,5 +609,7 @@ if (typeof module !== "undefined" && module.exports) {
     findLetVariableDefinition,
     evalMStringExpr,
     extractJsonObject,
+    parseTableVariablesFromMetadata,
+    computeMissingMandatoryVariables,
   };
 }

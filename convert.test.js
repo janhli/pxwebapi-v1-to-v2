@@ -18,6 +18,8 @@ const {
   evalMStringExpr,
   findLetVariableDefinition,
   extractJsonObject,
+  computeMissingMandatoryVariables,
+  parseTableVariablesFromMetadata,
 } = require("./convert.js");
 
 test("filter 'item' passes values through unchanged", () => {
@@ -52,24 +54,33 @@ test("filter 'top' becomes top(n) expression", () => {
   });
 });
 
-test("filter with codelist prefix (agg_single:) maps to codelist + values", () => {
+test("filter with vs: prefix maps to codelist v2_Fylker id, keeping the vs_ family prefix", () => {
+  const dim = { code: "Region", selection: { filter: "vs:Fylker", values: ["03"] } };
+  assert.deepEqual(convertV1DimensionToV2(dim), {
+    variableCode: "Region",
+    codelist: "vs_Fylker",
+    valueCodes: ["03"],
+  });
+});
+
+test("filter with agg_single: prefix maps to the agg_ codelist family (verified against SSB's real API)", () => {
   const dim = {
     code: "Region",
     selection: { filter: "agg_single:KommGjeldende", values: ["3101", "3103"] },
   };
   assert.deepEqual(convertV1DimensionToV2(dim), {
     variableCode: "Region",
-    codelist: "KommGjeldende",
+    codelist: "agg_KommGjeldende",
     valueCodes: ["3101", "3103"],
   });
 });
 
-test("filter with vs: prefix maps to codelist + values", () => {
-  const dim = { code: "Region", selection: { filter: "vs:Fylker", values: ["03"] } };
+test("filter with agg_multi: prefix also maps to the agg_ codelist family", () => {
+  const dim = { code: "Region", selection: { filter: "agg_multi:X", values: ["1"] } };
   assert.deepEqual(convertV1DimensionToV2(dim), {
     variableCode: "Region",
-    codelist: "Fylker",
-    valueCodes: ["03"],
+    codelist: "agg_X",
+    valueCodes: ["1"],
   });
 });
 
@@ -84,7 +95,7 @@ const sampleV1Query = {
 
 test("buildV2Selection maps every dimension in order", () => {
   assert.deepEqual(buildV2Selection(sampleV1Query), [
-    { variableCode: "Region", codelist: "KommGjeldende", valueCodes: ["3101", "3103"] },
+    { variableCode: "Region", codelist: "agg_KommGjeldende", valueCodes: ["3101", "3103"] },
     { variableCode: "ContentsCode", valueCodes: ["Personer"] },
     { variableCode: "Tid", valueCodes: ["2023", "2024"] },
   ]);
@@ -93,7 +104,7 @@ test("buildV2Selection maps every dimension in order", () => {
 test("buildV2PostBody wraps the selection array", () => {
   assert.deepEqual(buildV2PostBody(sampleV1Query), {
     selection: [
-      { variableCode: "Region", codelist: "KommGjeldende", valueCodes: ["3101", "3103"] },
+      { variableCode: "Region", codelist: "agg_KommGjeldende", valueCodes: ["3101", "3103"] },
       { variableCode: "ContentsCode", valueCodes: ["Personer"] },
       { variableCode: "Tid", valueCodes: ["2023", "2024"] },
     ],
@@ -104,7 +115,7 @@ test("buildV2GetQueryString emits codelist[...] before valueCodes[...] for a dim
   const qs = buildV2GetQueryString(sampleV1Query);
   assert.equal(
     qs,
-    "codelist[Region]=KommGjeldende&valueCodes[Region]=3101,3103&valueCodes[ContentsCode]=Personer&valueCodes[Tid]=2023,2024"
+    "codelist[Region]=agg_KommGjeldende&valueCodes[Region]=3101,3103&valueCodes[ContentsCode]=Personer&valueCodes[Tid]=2023,2024"
   );
 });
 
@@ -136,7 +147,7 @@ test("buildV2GetUrl builds the full v2 GET URL with lang and valueCodes", () => 
   const url = buildV2GetUrl("https://data.ssb.no", "07459", "no", sampleV1Query);
   assert.equal(
     url,
-    "https://data.ssb.no/api/pxwebapi/v2/tables/07459/data?lang=no&codelist[Region]=KommGjeldende&valueCodes[Region]=3101,3103&valueCodes[ContentsCode]=Personer&valueCodes[Tid]=2023,2024"
+    "https://data.ssb.no/api/pxwebapi/v2/tables/07459/data?lang=no&codelist[Region]=agg_KommGjeldende&valueCodes[Region]=3101,3103&valueCodes[ContentsCode]=Personer&valueCodes[Tid]=2023,2024"
   );
 });
 
@@ -152,6 +163,73 @@ test("buildV2GetUrl appends outputFormat when the v1 response format isn't json-
 test("buildV2PostUrl builds only the base URL (no valueCodes) since selection lives in the body", () => {
   const url = buildV2PostUrl("https://data.ssb.no", "07459", "no", sampleV1Query);
   assert.equal(url, "https://data.ssb.no/api/pxwebapi/v2/tables/07459/data?lang=no");
+});
+
+test("buildV2Selection appends a wildcard selection for extra (missing mandatory) variable codes", () => {
+  assert.deepEqual(buildV2Selection(sampleV1Query, ["Landbakgrunn"]), [
+    { variableCode: "Region", codelist: "agg_KommGjeldende", valueCodes: ["3101", "3103"] },
+    { variableCode: "ContentsCode", valueCodes: ["Personer"] },
+    { variableCode: "Tid", valueCodes: ["2023", "2024"] },
+    { variableCode: "Landbakgrunn", valueCodes: ["*"] },
+  ]);
+});
+
+test("buildV2Selection does not duplicate a variable that's already in the v1 query", () => {
+  assert.deepEqual(buildV2Selection(sampleV1Query, ["Region"]), buildV2Selection(sampleV1Query));
+});
+
+test("buildV2GetUrl includes wildcard valueCodes for extra variable codes", () => {
+  const q = { query: [{ code: "Tid", selection: { filter: "item", values: ["2024"] } }] };
+  const url = buildV2GetUrl("https://data.ssb.no", "09817", "no", q, ["Landbakgrunn"]);
+  assert.equal(
+    url,
+    "https://data.ssb.no/api/pxwebapi/v2/tables/09817/data?lang=no&valueCodes[Tid]=2024&valueCodes[Landbakgrunn]=*"
+  );
+});
+
+test("buildV2PostBody includes wildcard selection for extra variable codes", () => {
+  const q = { query: [{ code: "Tid", selection: { filter: "item", values: ["2024"] } }] };
+  assert.deepEqual(buildV2PostBody(q, ["Landbakgrunn"]), {
+    selection: [
+      { variableCode: "Tid", valueCodes: ["2024"] },
+      { variableCode: "Landbakgrunn", valueCodes: ["*"] },
+    ],
+  });
+});
+
+test("parseTableVariablesFromMetadata reads variable ids and their elimination flag", () => {
+  const metadata = {
+    id: ["Region", "Landbakgrunn"],
+    dimension: {
+      Region: { extension: { elimination: true } },
+      Landbakgrunn: { extension: { elimination: false } },
+    },
+  };
+  assert.deepEqual(parseTableVariablesFromMetadata(metadata), [
+    { id: "Region", elimination: true },
+    { id: "Landbakgrunn", elimination: false },
+  ]);
+});
+
+test("parseTableVariablesFromMetadata defaults elimination to true when the metadata shape is unclear", () => {
+  const metadata = { id: ["Mystery"], dimension: { Mystery: {} } };
+  assert.deepEqual(parseTableVariablesFromMetadata(metadata), [{ id: "Mystery", elimination: true }]);
+});
+
+test("computeMissingMandatoryVariables finds mandatory variables absent from the v1 query", () => {
+  const tableVariables = [
+    { id: "Region", elimination: true },
+    { id: "Landbakgrunn", elimination: false },
+    { id: "Tid", elimination: false },
+  ];
+  const q = { query: [{ code: "Region", selection: { filter: "item", values: ["0301"] } }] };
+  assert.deepEqual(computeMissingMandatoryVariables(q, tableVariables), ["Landbakgrunn", "Tid"]);
+});
+
+test("computeMissingMandatoryVariables returns an empty array when nothing is missing", () => {
+  const tableVariables = [{ id: "Region", elimination: false }];
+  const q = { query: [{ code: "Region", selection: { filter: "item", values: ["0301"] } }] };
+  assert.deepEqual(computeMissingMandatoryVariables(q, tableVariables), []);
 });
 
 test("unescapeMString turns doubled quotes into single quotes", () => {
@@ -398,7 +476,7 @@ test("convertMCode handles the real-world template end to end (GET mode)", () =>
   const result = convertMCode(realWorldTemplate, "GET", "https://data.ssb.no", "09817", "no");
   assert.match(
     result,
-    /Kilde = Csv\.Document\(Web\.Contents\("https:\/\/data\.ssb\.no\/api\/pxwebapi\/v2\/tables\/09817\/data\?lang=no&outputFormat=csv&outputFormatParams=SeparatorSemicolon&codelist\[Region\]=Kommune&valueCodes\[Region\]=3001,3002&valueCodes\[Tid\]=2023,2022"\)/
+    /Kilde = Csv\.Document\(Web\.Contents\("https:\/\/data\.ssb\.no\/api\/pxwebapi\/v2\/tables\/09817\/data\?lang=no&outputFormat=csv&outputFormatParams=SeparatorSemicolon&codelist\[Region\]=vs_Kommune&valueCodes\[Region\]=3001,3002&valueCodes\[Tid\]=2023,2022"\)/
   );
   assert.match(result, /^let\ntableId = "09817",\nPostContents ="/);
   assert.match(result, /in\n {4}Kilde$/);
